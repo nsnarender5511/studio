@@ -1,6 +1,9 @@
 import asyncio
-from google.adk.agents import BaseAgent
+from google.adk.agents import BaseAgent, SequentialAgent, LlmAgent
 from google.adk.sessions import State
+from google.adk.tools import FunctionTool, BaseTool
+from typing import List, Dict, Any, Optional
+from pydantic import Field
 
 # Placeholder imports for sub-agents and tools
 # These will need to be properly defined and imported later
@@ -38,12 +41,58 @@ code_execution_verifier_agent = PlaceholderAgent(name="CodeExecutionVerifierAgen
 
 
 class OrchestratorAgent(BaseAgent):
-    """Custom orchestrator agent with robust workflow management."""
-    def __init__(self, sub_agents, tools):
-        super().__init__(name="GitRepoDocumentorOrchestrator")
-        self.sub_agents = sub_agents
-        self.tools = tools
-        # Additional initialization for loop control
+    """Coordinates the documentation generation process using sub-agents."""
+    name: str = "Orchestrator"
+    description: str = "Manages the overall documentation workflow."
+
+    # Assume sub_agents is already defined
+    sub_agents: Dict[str, BaseAgent] = Field(...)
+
+    # Add the tools field definition
+    tools: List[BaseTool] = Field(default_factory=list)
+
+    # Add other fields specific to your OrchestratorAgent
+    # output_key: str = "final_documentation"
+
+    # Ensure __init__ handles Pydantic initialization correctly if overridden
+    # Example:
+    # def __init__(self, **data: Any):
+    #     super().__init__(**data)
+    #     # Custom initialization if needed
+
+    # Add the core logic methods for your agent (e.g., run_async, plan, execute)
+    async def run_async(self, state: State, **kwargs) -> State:
+        # Example simplified logic - replace with actual orchestration flow
+        logger.info(f"{self.name}: Starting orchestration.")
+        current_state = state
+
+        # Example: Run sub-agents sequentially
+        # Adjust order and logic based on your desired workflow
+        agent_sequence = [
+            "file_identification", "structure_designer", "code_parser",
+            "code_interpreter", "dependency_analyzer", "testing_analyzer",
+            "feature_extractor", "content_generator", "verifier",
+            "visualizer", "md_formatter", "obsidian_writer", "summarizer",
+            "fact_checker", "self_reflection", "code_execution_verifier"
+        ]
+
+        for agent_name in agent_sequence:
+            if agent_name in self.sub_agents:
+                sub_agent = self.sub_agents[agent_name]
+                logger.info(f"{self.name}: Running sub-agent -> {sub_agent.name}")
+                try:
+                    current_state = await sub_agent.run_async(state=current_state)
+                    # Add checks here based on sub-agent output in state if needed
+                except Exception as e:
+                    logger.error(f"{self.name}: Error running sub-agent {sub_agent.name}: {e}", exc_info=True)
+                    # Decide how to handle sub-agent failure (e.g., stop, mark, continue)
+                    current_state["orchestration_error"] = f"Failed during {sub_agent.name}: {e}"
+                    break # Example: Stop on first error
+            else:
+                logger.warning(f"{self.name}: Sub-agent '{agent_name}' not found.")
+
+        logger.info(f"{self.name}: Orchestration finished.")
+        return current_state
 
     async def run(self, state: State, artifact_service):
         """Implement the complete documentation workflow with retry logic."""
