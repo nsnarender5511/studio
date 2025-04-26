@@ -262,7 +262,7 @@ def get_history():
     try:
         jobs = JobHistory.query.order_by(JobHistory.request_time.desc()).all()
         history_list = [job.to_dict() for job in jobs]
-        return jsonify(history_list)
+    return jsonify(history_list)
     except Exception as e:
         logging.error(f"Failed to retrieve job history from database: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve job history"}), 500
@@ -286,8 +286,8 @@ def run_server():
 
 
 if __name__ == '__main__':
-     # This allows running the server directly with `python -m backend.src.git_repo_documentor.server`
-     # Make sure PYTHONPATH includes the project root or adjust imports accordingly.
+    # This allows running the server directly with `python -m backend.src.git_repo_documentor.server`
+    # Make sure PYTHONPATH includes the project root or adjust imports accordingly.
      # Remember to also run Celery workers:
      # celery -A backend.src.celery_app worker --loglevel=info
      run_server()

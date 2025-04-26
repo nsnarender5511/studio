@@ -156,8 +156,8 @@ def placeholder_knowledge_graph_tool(action: str, data: dict) -> dict:
     Returns:
         A dictionary indicating the result of the action.
     """
-    print(f"Placeholder Tool: Knowledge Graph action '{action}'")
-    return {"status": "success"}
+     print(f"Placeholder Tool: Knowledge Graph action '{action}'")
+     return {"status": "success"}
 knowledge_graph_tool = FunctionTool(func=placeholder_knowledge_graph_tool)
 
 # Memory Tools Placeholder
@@ -171,8 +171,8 @@ def placeholder_memory_interaction_tool(action: str, data: dict) -> dict:
     Returns:
         Result of the memory interaction.
     """
-    print(f"Placeholder Tool: Memory action '{action}'")
-    return {"retrieved_data": "some info"}
+     print(f"Placeholder Tool: Memory action '{action}'")
+     return {"retrieved_data": "some info"}
 memory_interaction_tool = FunctionTool(func=placeholder_memory_interaction_tool)
 
 # Fact Verification Placeholder
