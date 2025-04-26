@@ -21,6 +21,7 @@ lerna-debug.log*
 # Optional Editor directories
 .vscode/
 .idea/
+.cursor/
 
 # Optional OS files
 .DS_Store 
