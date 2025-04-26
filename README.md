@@ -4,8 +4,9 @@ This project uses AI (via Google ADK and Gemini) to automatically generate docum
 
 ## Project Structure
 
--   `/`: Next.js frontend application (using App Router)
+-   `/frontend`: Next.js frontend application (using App Router)
 -   `/backend`: Python backend service (Flask API wrapping Google ADK)
+-   `/project_docs`: Project documentation and architecture blueprints
 
 ## Getting Started
 
@@ -29,7 +30,9 @@ This project uses AI (via Google ADK and Gemini) to automatically generate docum
 
 2.  **Install Frontend Dependencies:**
     ```bash
+    cd frontend
     yarn install
+    cd ..
     ```
 
 3.  **Install Backend Dependencies:**
@@ -40,7 +43,7 @@ This project uses AI (via Google ADK and Gemini) to automatically generate docum
     ```
 
 4.  **Configure Environment Variables:**
-    -   Create a `.env` file in the root directory (copy from `.env.example` if provided, or create manually).
+    -   Create a `.env` file in the `frontend` directory (copy from `.env.example` if provided, or create manually).
     -   Set `BACKEND_API_URL`: This should point to where your Python backend will run (default is `http://127.0.0.1:5001`).
     -   Set `GOOGLE_API_KEY`: Your API key for Google AI services (Gemini). The backend reads this directly from its environment.
 
@@ -51,13 +54,15 @@ You need to run both the frontend and backend services concurrently.
 1.  **Run the Backend Service:**
     Open a terminal in the **root project directory**:
     ```bash
-    poetry run python -m backend.src.git_repo_documentor
+    cd backend
+    poetry run python -m src.git_repo_documentor
     ```
     The backend server should start, typically on `http://127.0.0.1:5001`.
 
 2.  **Run the Frontend Service:**
     Open *another* terminal in the **root project directory**:
     ```bash
+    cd frontend
     yarn dev
     ```
     The frontend development server should start, typically on `http://localhost:9002`.
