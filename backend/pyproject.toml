@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "gitdocu-backend"
+version = "0.1.0"
+description = "Backend service for GitDocu using Google ADK."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+google-adk = "*"
+google-generativeai = "*"
+astroid = "*"
+graphviz = "*"
+matplotlib = "*"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
