@@ -1,231 +1,271 @@
-
 import asyncio
 import threading
 import uuid
+import os
+import logging
+import tempfile
+import shutil
+import re # For basic Git URL check
+import git # For cloning
+from datetime import datetime, timezone # Added timezone
+import json # Added for storing error info
+from pathlib import Path # Added
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService, State, SessionService
-from google.adk.artifacts import InMemoryArtifactService, ArtifactService
-from google.adk.memory import InMemoryMemoryService, MemoryService
+from pydantic import BaseModel, Field, HttpUrl, ValidationError
+from celery.result import AsyncResult
 
-# --- Import Agents and Tools (relative imports assuming server.py is run from the project root or similar) ---
-from .agents.orchestrator import OrchestratorAgent
-from .agents.orchestrator import (
-    file_identification_agent, structure_designer_agent, code_parser_agent,
-    code_interpreter_agent, dependency_analyzer_agent, testing_analyzer_agent,
-    feature_extractor_agent, content_generator_agent, verifier_agent,
-    visualizer_agent, md_formatter_agent, obsidian_writer_agent, summarizer_agent,
-    fact_checker_agent, self_reflection_agent, code_execution_verifier_agent
-)
-from .tools import (
-    read_directory_tool, read_file_tool, write_file_tool, ensure_directory_exists_tool,
-    code_parser_tool, dependency_analyzer_tool, web_search_tool, visualization_tool,
-    format_obsidian_links_tool, knowledge_graph_tool, memory_interaction_tool,
-    fact_verification_tool, code_executor_tool
-)
-from .services.memory_service import get_memory_service # Example factory
+from google.adk.sessions import InMemorySessionService, BaseSessionService as SessionService
+from google.adk.artifacts import InMemoryArtifactService, BaseArtifactService as ArtifactService
+from google.adk.memory import InMemoryMemoryService, BaseMemoryService as MemoryService
+# Use the correct relative import for the local service
+from .services.memory_service import get_memory_service
 
-import sys
-import os
-import pathlib
-import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+# --- Import Celery app and task ---
+from ..celery_app import celery_app
+from .tasks import run_adk_documentation_task
 
-app = Flask(__name__)
+# --- Import DB instance and Model from models.py ---
+from .models import db, JobHistory
+
+# --- Configuration ---
+# Use pathlib for cleaner path construction
+SERVER_DIR = Path(__file__).parent
+INSTANCE_FOLDER_PATH = SERVER_DIR.parent / 'instance'
+SQLITE_DB_PATH = INSTANCE_FOLDER_PATH / 'history.db'
+SQLALCHEMY_DATABASE_URI = f'sqlite:///{SQLITE_DB_PATH.resolve()}'
+
+# Base directory for clones (configurable via environment variable)
+CLONE_BASE_DIR = os.environ.get('CLONE_BASE_DIR', os.path.join(tempfile.gettempdir(), 'gitdocu_clones'))
+# Base directory for output (configurable via environment variable)
+OUTPUT_BASE_DIR = os.environ.get('OUTPUT_BASE_DIR', os.path.abspath("gitdocu_output"))
+
+# Ensure base directories exist
+os.makedirs(CLONE_BASE_DIR, exist_ok=True)
+os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
+os.makedirs(INSTANCE_FOLDER_PATH, exist_ok=True) # Ensure instance folder exists for DB
+
+# --- Flask App Setup ---
+app = Flask(__name__, instance_path=INSTANCE_FOLDER_PATH)
+app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # Recommended
+
+# Initialize SQLAlchemy with the app
+db.init_app(app)
+
 CORS(app) # Allow requests from the frontend development server
+logging.basicConfig(level=logging.INFO) # Basic logging setup
 
-# --- Global State Management (Simple In-Memory) ---
-# WARNING: This is simple and not suitable for production. Lost on server restart.
-# Consider using a database or persistent storage for real applications.
-executor = ThreadPoolExecutor(max_workers=5) # Pool for running ADK jobs
-active_jobs = {} # Dictionary to store job status: {job_id: JobStatus}
+# Check if DB URI is configured
+if not app.config.get('SQLALCHEMY_DATABASE_URI'):
+    logging.error("FATAL: SQLALCHEMY_DATABASE_URI is not configured. History feature will not work.")
+    # Optionally exit or raise an error if DB is critical for startup
+    # sys.exit(1)
 
-@dataclass
-class JobStatus:
-    job_id: str
-    repo_url: str
-    status: str = "pending" # pending, running, completed, failed
-    start_time: datetime = field(default_factory=datetime.utcnow)
-    end_time: datetime | None = None
-    details: str | None = None
-    final_state_summary: dict | None = None # Store relevant final state parts
+# --- Create Database Tables ---
+with app.app_context():
+    db.create_all()
 
-# --- ADK Setup ---
-def create_service_factory(service_type: str = "memory", **kwargs) -> tuple[SessionService, ArtifactService, MemoryService]:
-    """Create appropriate services based on configuration."""
-    # Simplified for now, always using memory services
-    print("Using InMemory services for ADK runner.")
-    session_service = InMemorySessionService()
-    artifact_service = InMemoryArtifactService()
-    memory_service = get_memory_service(service_type="memory")
-    return session_service, artifact_service, memory_service
+# --- ADK Service Factory (Moved to services/factory.py) ---
+# def create_service_factory() -> tuple[SessionService, ArtifactService, MemoryService]:
+#     ...
 
-def run_adk_process(job_id: str, repo_path_str: str, output_dir_str: str, use_obsidian: bool):
-    """The actual function to run the ADK documentation process."""
-    global active_jobs
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
-    try:
-        active_jobs[job_id].status = "running"
-        print(f"Job {job_id}: Starting ADK process for {repo_path_str}")
+# --- Pydantic Models for Request Validation ---
+class DocumentRequest(BaseModel):
+    repoUrl: str # Keep as string for now, validate format separately
+    obsidianFormat: bool = False
 
-        session_service, artifact_service, memory_service = create_service_factory()
-
-        sub_agents = {
-            "file_identification": file_identification_agent,
-            "structure_designer": structure_designer_agent,
-            "code_parser": code_parser_agent,
-            "code_interpreter": code_interpreter_agent,
-            "dependency_analyzer": dependency_analyzer_agent,
-            "testing_analyzer": testing_analyzer_agent,
-            "feature_extractor": feature_extractor_agent,
-            "content_generator": content_generator_agent,
-            "verifier": verifier_agent,
-            "visualizer": visualizer_agent,
-            "md_formatter": md_formatter_agent,
-            "obsidian_writer": obsidian_writer_agent,
-            "summarizer": summarizer_agent,
-            "fact_checker": fact_checker_agent,
-            "self_reflection": self_reflection_agent,
-            "code_execution_verifier": code_execution_verifier_agent,
-        }
-        tools = [
-            read_directory_tool, read_file_tool, write_file_tool, ensure_directory_exists_tool,
-            code_parser_tool, dependency_analyzer_tool, web_search_tool, visualization_tool,
-            format_obsidian_links_tool, knowledge_graph_tool, memory_interaction_tool,
-            fact_verification_tool, code_executor_tool
-        ]
-
-        orchestrator = OrchestratorAgent(sub_agents=sub_agents, tools=tools)
-        runner = Runner(
-            agent=orchestrator,
-            session_service=session_service,
-            artifact_service=artifact_service,
-            memory_service=memory_service,
-            app_name="GitDocuRunner",
-        )
-
-        initial_state = State({
-            "repo_path": repo_path_str,
-            "output_dir": output_dir_str,
-            "use_obsidian_format": use_obsidian,
-            "verbose_logging": True # Enable verbose logging from ADK agents/tools
-        })
-
-        # Run the ADK process synchronously within the asyncio loop
-        final_event = loop.run_until_complete(runner.run(initial_state=initial_state))
-        final_state = final_event.state if hasattr(final_event, 'state') else State({})
-
-        # Extract summary from final state (adjust keys as needed based on SummarizerAgent output)
-        plan = final_state.get('documentation_plan', [])
-        summary_status = final_state.get('summary_status', 'Not run or status unavailable')
-        success_count = sum(1 for item in plan if item.get('status') == 'done')
-        fail_count = sum(1 for item in plan if item.get('status') == 'failed')
-
-        active_jobs[job_id].status = "completed"
-        active_jobs[job_id].details = f"Processed {len(plan)} files. {success_count} succeeded, {fail_count} failed. Summary: {summary_status}"
-        active_jobs[job_id].final_state_summary = { # Store only serializable parts
-             "documentation_plan": plan,
-             "summary_status": summary_status
-        }
-        print(f"Job {job_id}: ADK process completed successfully.")
-
-    except Exception as e:
-        active_jobs[job_id].status = "failed"
-        active_jobs[job_id].details = f"Error during ADK process: {str(e)}"
-        print(f"Job {job_id}: ADK process failed: {e}")
-        import traceback
-        traceback.print_exc() # Print full traceback to server logs
-    finally:
-        active_jobs[job_id].end_time = datetime.utcnow()
-        loop.close()
-
+# Basic Git URL validation (can be improved)
+GIT_URL_REGEX = re.compile(r"^(?:git|ssh|https|http)://|^git@|^[^/]+@[^:]+:")
 
 # --- API Endpoints ---
 
 @app.route('/document', methods=['POST'])
 def start_documentation():
     """
-    Starts the documentation process for a given Git repository URL.
-    For now, it assumes the URL points to a local path.
-    In a real scenario, this would clone the repo first.
+    Starts the documentation process by cloning a Git repository,
+    creating a job history record, and enqueuing a Celery task.
     """
-    global active_jobs
-    data = request.get_json()
-    if not data or 'repoUrl' not in data:
-        return jsonify({"error": "Missing 'repoUrl' in request body"}), 400
+    try:
+        data = DocumentRequest.model_validate(request.get_json())
+    except ValidationError as e:
+        return jsonify({"error": "Invalid request body", "details": e.errors()}), 400
+    except Exception as e: # Catch potential JSON decoding errors
+         return jsonify({"error": f"Failed to parse request body: {e}"}), 400
 
-    repo_url = data['repoUrl']
-    # --- !!! SECURITY WARNING !!! ---
-    # Directly using the input URL as a path is extremely dangerous.
-    # In a real application:
-    # 1. Validate the URL is a git repository URL.
-    # 2. Clone the repository to a secure, temporary location.
-    # 3. Use the path to the temporary clone.
-    # For this example, we'll *assume* repoUrl is a safe local path for now.
-    # We add a basic check to prevent trivial path traversal, but this is NOT sufficient.
-    if ".." in repo_url or not os.path.isabs(repo_url):
-         # Basic check, needs significant improvement for security
-         # A better approach is to clone to a known base directory
-         print(f"Warning: Potential unsafe path requested: {repo_url}. Treating as local path for demo.")
-         # For demo, treat it as local path but maybe relative to a base dir?
-         # For simplicity, let's assume it's a valid path that exists where the server runs.
-         # If it doesn't exist, ADK file operations will fail later.
-         repo_path_str = repo_url # Still potentially unsafe
-    else:
-        repo_path_str = repo_url
+    repo_url = data.repoUrl
 
-    # Validate if the path exists (basic check)
-    if not os.path.isdir(repo_path_str):
-         # If not absolute, try relative to current dir (less safe)
-         repo_path_str_rel = os.path.abspath(repo_url)
-         if not os.path.isdir(repo_path_str_rel):
-              return jsonify({"error": f"Repository path not found or not a directory: {repo_url}"}), 400
-         repo_path_str = repo_path_str_rel # Use resolved absolute path
+    # --- Basic Git URL Format Check ---
+    # This is a basic check, not foolproof (e.g., doesn't guarantee reachability)
+    if not GIT_URL_REGEX.match(repo_url):
+        logging.warning(f"Received potentially invalid Git URL format: {repo_url}")
+        # Decide whether to reject or attempt cloning anyway
+        # return jsonify({"error": "Invalid Git repository URL format"}), 400
+        # For now, let's allow it and let git clone fail if it's truly invalid.
 
-
-    job_id = str(uuid.uuid4())
-    output_dir_base = os.path.abspath("gitdocu_output") # Base output dir
-    output_dir_job = os.path.join(output_dir_base, job_id) # Job-specific output dir
+    # --- Prepare Directories ---
+    job_id = str(uuid.uuid4()) # Use Celery task ID later if preferred, but UUID is fine
+    output_dir_job = os.path.join(OUTPUT_BASE_DIR, job_id)
+    clone_dir = None # Initialize
 
     try:
         os.makedirs(output_dir_job, exist_ok=True)
+        # Create a secure temporary directory for cloning
+        # This context manager handles cleanup if the script crashes here,
+        # but the task needs to clean it up upon completion/failure.
+        # We create it *before* the task so we can pass the path.
+        temp_dir_for_clone = tempfile.mkdtemp(prefix=f"{job_id}_", dir=CLONE_BASE_DIR)
+        clone_dir = temp_dir_for_clone # Path to pass to the task
+        logging.info(f"Job {job_id}: Created temporary clone directory: {clone_dir}")
+
     except Exception as e:
-         return jsonify({"error": f"Could not create output directory: {e}"}), 500
+         logging.error(f"Job {job_id}: Failed to create directories: {e}", exc_info=True)
+         # Attempt cleanup if clone_dir was partially created
+         if clone_dir and os.path.exists(clone_dir):
+             shutil.rmtree(clone_dir, ignore_errors=True)
+         return jsonify({"error": f"Server error setting up job directories: {e}"}), 500
 
-    use_obsidian = data.get('obsidianFormat', False) # Optional flag from frontend
+    # --- Clone Repository ---
+    try:
+        logging.info(f"Job {job_id}: Cloning {repo_url} into {clone_dir}")
+        # Use GitPython or subprocess
+        git.Repo.clone_from(repo_url, clone_dir, depth=1) # Shallow clone for speed
+        logging.info(f"Job {job_id}: Cloning successful.")
+    except git.GitCommandError as e:
+        logging.error(f"Job {job_id}: Git clone failed for {repo_url}. Error: {e}", exc_info=True)
+        # Clean up directories before returning error
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        shutil.rmtree(output_dir_job, ignore_errors=True)
+        return jsonify({
+            "error": "Failed to clone repository",
+            "details": str(e.stderr) # Provide Git's error message
+        }), 400
+    except Exception as e: # Catch other potential errors during clone setup
+        logging.error(f"Job {job_id}: Error during git clone setup for {repo_url}: {e}", exc_info=True)
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        shutil.rmtree(output_dir_job, ignore_errors=True)
+        return jsonify({"error": f"Server error during repository cloning: {e}"}), 500
 
-    # Create job status entry
-    job_status = JobStatus(job_id=job_id, repo_url=repo_url)
-    active_jobs[job_id] = job_status
+    # --- Create Initial History Record ---
+    try:
+        history_entry = JobHistory(
+            job_id=job_id,
+            repo_url=repo_url,
+            status='PENDING'
+            # request_time is default
+        )
+        db.session.add(history_entry)
+        db.session.commit()
+        logging.info(f"Job {job_id}: Created initial history record.")
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Job {job_id}: Failed to create history record: {e}", exc_info=True)
+        # Clean up directories since we can't track the job
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        shutil.rmtree(output_dir_job, ignore_errors=True)
+        return jsonify({"error": f"Server error saving job history: {e}"}), 500
 
-    # Run the ADK process in a background thread
-    executor.submit(run_adk_process, job_id, repo_path_str, output_dir_job, use_obsidian)
+    # --- Enqueue Celery Task ---
+    try:
+        task = run_adk_documentation_task.apply_async(
+            args=[clone_dir, output_dir_job, data.obsidianFormat],
+            task_id=job_id # Use the same ID for Celery task and history
+        )
+        logging.info(f"Job {job_id}: Submitted task for processing repo {repo_url}. Celery Task ID: {task.id}")
+        return jsonify({
+            "job_id": task.id,
+            "status": "PENDING", # Initial status is PENDING
+            "message": "Documentation task enqueued."
+        }), 202
+    except Exception as e:
+        # Handle errors during task submission (e.g., broker connection error)
+        logging.error(f"Job {job_id}: Failed to enqueue Celery task: {e}", exc_info=True)
+        # Attempt to remove the history record we just added
+        try:
+            entry_to_delete = JobHistory.query.filter_by(job_id=job_id).first()
+            if entry_to_delete:
+                db.session.delete(entry_to_delete)
+                db.session.commit()
+                logging.info(f"Job {job_id}: Removed history record due to Celery submission failure.")
+        except Exception as db_err:
+            db.session.rollback()
+            logging.error(f"Job {job_id}: Failed to remove history record after Celery error: {db_err}", exc_info=True)
+        # Clean up directories since the task wasn't submitted
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        shutil.rmtree(output_dir_job, ignore_errors=True)
+        return jsonify({"error": f"Failed to submit documentation task: {e}"}), 500
 
-    print(f"Job {job_id}: Submitted for processing repo {repo_url}")
-    return jsonify({"job_id": job_id, "status": "pending", "message": "Documentation process started."}), 202
 
 @app.route('/status/<job_id>', methods=['GET'])
 def get_status(job_id):
-    """Returns the status of a specific documentation job."""
-    job = active_jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-    # Use asdict for easy JSON conversion, handle datetime separately if needed
-    return jsonify(asdict(job))
+    """Returns the status of a specific documentation job using Celery backend."""
+    task_result = AsyncResult(job_id, app=celery_app)
+
+    response = {
+        "job_id": job_id,
+        "status": task_result.status, # PENDING, STARTED, SUCCESS, FAILURE, RETRY, REVOKED
+        "details": None,
+        "result": None,
+        "error_info": None
+    }
+
+    if task_result.ready(): # Task finished (SUCCESS or FAILURE)
+        if task_result.successful():
+            result_data = task_result.get() # Get the return value from the task
+            response["details"] = result_data.get("details", "Task completed.")
+            response["result"] = result_data # Include full task result if needed
+        else: # Task failed
+            try:
+                # Accessing result of a failed task raises the exception.
+                # Access state info instead.
+                response["details"] = "Task failed during execution."
+                # Try to get metadata stored when state was updated to FAILURE
+                if isinstance(task_result.info, dict):
+                    response["error_info"] = {
+                        "type": task_result.info.get("error_type", "Unknown"),
+                        "message": task_result.info.get("details", str(task_result.info)), # Use 'details' from our FAILURE meta
+                        # Optionally include traceback if stored and desired
+                        # "traceback": task_result.info.get("traceback")
+                    }
+                elif isinstance(task_result.info, Exception):
+                     response["error_info"] = {
+                         "type": type(task_result.info).__name__,
+                         "message": str(task_result.info)
+                     }
+                else: # Fallback if info is not an exception or dict
+                     response["error_info"] = {
+                         "type": "Unknown Error",
+                         "message": str(task_result.info)
+                     }
+
+            except Exception as e:
+                logging.error(f"Error retrieving failure info for job {job_id}: {e}", exc_info=True)
+                response["details"] = f"Task failed, but error details could not be retrieved: {e}"
+                response["error_info"] = {"type": "Retrieval Error", "message": str(e)}
+    elif task_result.state == 'STARTED':
+         # Try to get intermediate status from metadata if set via update_state
+         meta = task_result.info or {}
+         response["details"] = meta.get("status", "Task is running...")
+    elif task_result.state == 'PENDING':
+        response["details"] = "Task is waiting to be processed."
+    else: # RETRY, REVOKED, or custom states
+        response["details"] = f"Task is in state: {task_result.state}"
+
+    return jsonify(response)
+
 
 @app.route('/history', methods=['GET'])
 def get_history():
-    """Returns the history of all documentation jobs."""
-    # Sort jobs by start time, newest first
-    sorted_jobs = sorted(active_jobs.values(), key=lambda j: j.start_time, reverse=True)
-    # Convert job objects to dictionaries for JSON response
-    history_list = [asdict(job) for job in sorted_jobs]
-    return jsonify(history_list)
+    """Returns the history of documentation jobs from the database."""
+    try:
+        jobs = JobHistory.query.order_by(JobHistory.request_time.desc()).all()
+        history_list = [job.to_dict() for job in jobs]
+        return jsonify(history_list)
+    except Exception as e:
+        logging.error(f"Failed to retrieve job history from database: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve job history"}), 500
 
 
 def run_server():
@@ -234,20 +274,25 @@ def run_server():
      # if 'GOOGLE_API_KEY' not in os.environ:
      #    print("Warning: GOOGLE_API_KEY environment variable not set. ADK might fail.")
 
-     # Determine host and port
+     # Determine host and port from environment variables
      host = os.environ.get('FLASK_HOST', '127.0.0.1')
-     port = int(os.environ.get('FLASK_PORT', 5001)) # Use 5001 to avoid potential conflicts
+     port = int(os.environ.get('FLASK_PORT', 5001))
 
-     print(f"Starting Flask server on http://{host}:{port}")
-     app.run(host=host, port=port, debug=False) # Turn debug off for stability with threading
+     logging.info(f"Starting Flask server on http://{host}:{port}")
+     logging.info(f"Database located at: {SQLALCHEMY_DATABASE_URI}")
+     # Use a production-ready WSGI server (like gunicorn or waitress) instead of app.run in production
+     # For development:
+     app.run(host=host, port=port, debug=False) # Keep debug=False for stability, especially with Celery
 
 
 if __name__ == '__main__':
-    # This allows running the server directly with `python -m backend.src.git_repo_documentor.server`
-    # Make sure PYTHONPATH includes the project root or adjust imports accordingly.
+     # This allows running the server directly with `python -m backend.src.git_repo_documentor.server`
+     # Make sure PYTHONPATH includes the project root or adjust imports accordingly.
+     # Remember to also run Celery workers:
+     # celery -A backend.src.celery_app worker --loglevel=info
      run_server()
 
 # To run from project root: poetry run python -m backend.src.git_repo_documentor.server
-# Ensure backend/src is in PYTHONPATH if running differently.
-
-```
+# And in another terminal: poetry run celery -A backend.src.celery_app worker --loglevel=info
+# Ensure Redis server is running.
+# Ensure required environment variables (e.g., for ADK services, broker URLs) are set.
