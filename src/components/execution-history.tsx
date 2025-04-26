@@ -85,7 +85,11 @@ const statusMap: Record<
 
 const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds
 
-export function ExecutionHistory() {
+interface ExecutionHistoryProps {
+  refreshKey?: number; // Prop to trigger refresh
+}
+
+export function ExecutionHistory({ refreshKey }: ExecutionHistoryProps) {
   const [history, setHistory] = useState<ExecutionHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +98,7 @@ export function ExecutionHistory() {
   const loadHistory = useCallback(async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
     setError(null);
+    console.log("Fetching execution history..."); // Log fetch start
     const result = await fetchExecutionHistory();
     if ('error' in result) {
       setError(result.error);
@@ -102,16 +107,19 @@ export function ExecutionHistory() {
         title: 'Failed to Load History',
         description: result.error,
       });
+       console.error("Error fetching history:", result.error);
     } else {
       setHistory(result); // Assuming backend returns sorted data
+       console.log("History fetched successfully:", result.length, "items");
     }
     if (showLoading) setIsLoading(false);
   }, [toast]); // Added toast dependency
 
-  // Initial load
+  // Initial load and reload when refreshKey changes
   useEffect(() => {
+    console.log("Effect triggered: Initial load or refreshKey changed", refreshKey);
     loadHistory();
-  }, [loadHistory]);
+  }, [loadHistory, refreshKey]); // Add refreshKey to dependency array
 
    // Polling mechanism for running jobs
   useEffect(() => {
@@ -141,6 +149,7 @@ export function ExecutionHistory() {
                                  title: `Job ${statusResult.status.toUpperCase()}`,
                                  description: `Job for ${statusResult.repo_url.split('/').slice(-2).join('/')} finished.`,
                              });
+                             console.log(`Job ${jobId} finished with status: ${statusResult.status}`);
                          }
                      }
                      return updated;
@@ -150,16 +159,15 @@ export function ExecutionHistory() {
                 console.warn(`Polling failed for job ${jobId}: ${statusResult.error}`);
             }
         }
-         // Optional: If any job finished, trigger a full history reload
-        // if (historyUpdated && history.some(job => job.job_id && runningJobIds.includes(job.job_id) && (job.status === 'completed' || job.status === 'failed'))) {
-        //    loadHistory(false); // Reload full history without showing loading indicator
-        // }
 
     }, POLLING_INTERVAL_MS);
 
     // Cleanup function to clear the interval when the component unmounts
     // or when the list of running jobs changes
-    return () => clearInterval(intervalId);
+    return () => {
+        console.log("Clearing polling interval.");
+        clearInterval(intervalId);
+    };
   }, [history, toast]); // Rerun effect if history changes (e.g., job status updates)
 
   const renderSkeleton = () => (

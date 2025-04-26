@@ -1,10 +1,20 @@
 
+'use client'; // Make the page a client component to manage state
+
+import { useState, useCallback } from 'react';
 import { RepoInputForm } from '@/components/repo-input-form';
 import { ExecutionHistory } from '@/components/execution-history';
 
-// startDocumentationProcess function removed, it will be handled by a server action.
-
 export default function Home() {
+  // State to trigger refresh in ExecutionHistory
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Callback function to trigger refresh
+  const triggerRefresh = useCallback(() => {
+    console.log('Triggering history refresh from page...');
+    setRefreshKey(prevKey => prevKey + 1);
+  }, []);
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-start p-8 md:p-16 lg:p-24 bg-background">
       <div className="w-full max-w-6xl flex flex-col items-center space-y-12">
@@ -17,11 +27,11 @@ export default function Home() {
            </p>
         </header>
 
-        {/* Repository Input Form - Removed onDocumentationStart prop */}
-        <RepoInputForm />
+        {/* Pass the triggerRefresh callback to the form */}
+        <RepoInputForm onJobSubmitted={triggerRefresh} />
 
-        {/* Execution History Table */}
-        <ExecutionHistory />
+        {/* Pass the refreshKey to ExecutionHistory to trigger re-fetching */}
+        <ExecutionHistory refreshKey={refreshKey} />
 
       </div>
        <footer className="mt-16 text-center text-muted-foreground text-sm">

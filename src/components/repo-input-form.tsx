@@ -40,8 +40,12 @@ const formSchema = z.object({
     // }),
 });
 
+interface RepoInputFormProps {
+    onJobSubmitted?: () => void; // Callback prop
+}
 
-export function RepoInputForm() {
+
+export function RepoInputForm({ onJobSubmitted }: RepoInputFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
@@ -73,9 +77,8 @@ export function RepoInputForm() {
       });
       form.reset(); // Reset form on successful submission
 
-      // TODO: Trigger a refresh of the history table (e.g., via a shared state or context)
-      // This requires lifting state up or using a state management library.
-      // For now, the user needs to manually wait or refresh.
+      // Call the callback function if provided
+      onJobSubmitted?.();
 
     } catch (error) {
       console.error('Error submitting documentation job:', error);
