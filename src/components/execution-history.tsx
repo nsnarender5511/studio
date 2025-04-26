@@ -2,8 +2,8 @@
 'use client';
 
 import type * as React from 'react';
-import { useState, useEffect } from 'react';
-import { Clock, CheckCircle, XCircle, Loader2, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Clock, CheckCircle, XCircle, Loader2, AlertTriangle } from 'lucide-react'; // Use AlertTriangle for errors
 import {
   Table,
   TableBody,
@@ -17,63 +17,60 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatDistanceToNow } from 'date-fns'; // For relative time
+import { Button } from '@/components/ui/button'; // For refresh button
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'; // For tooltips
+import { formatDistanceToNow, parseISO } from 'date-fns'; // parseISO for string dates
 
-export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed';
+// Import server actions and types
+import { fetchExecutionHistory, fetchJobStatus, type ExecutionHistoryItem, type ExecutionStatus } from '@/app/actions';
+import { useToast } from '@/hooks/use-toast';
 
-export interface ExecutionHistoryItem {
-  id: string;
-  repoUrl: string;
-  startTime: Date;
-  endTime?: Date;
-  status: ExecutionStatus;
-  details?: string; // e.g., error message or summary
+
+// Helper to format duration (handles string dates from backend)
+function formatDuration(startStr: string, endStr?: string): string {
+  try {
+    const start = parseISO(startStr);
+    if (!endStr) {
+        // Calculate duration from start to now if still running or pending
+        const now = new Date();
+        const durationSeconds = Math.round((now.getTime() - start.getTime()) / 1000);
+        if (durationSeconds < 0) return '-'; // Avoid negative duration if clocks are slightly off
+        if (durationSeconds < 60) return `${durationSeconds}s`;
+        const durationMinutes = Math.floor(durationSeconds / 60);
+        if (durationMinutes < 60) return `${durationMinutes}m ${durationSeconds % 60}s`;
+        const durationHours = Math.floor(durationMinutes / 60);
+        return `${durationHours}h ${durationMinutes % 60}m`;
+    }
+    const end = parseISO(endStr);
+    const durationSeconds = Math.round((end.getTime() - start.getTime()) / 1000);
+    if (durationSeconds < 0) return '-';
+    if (durationSeconds < 60) return `${durationSeconds}s`;
+    const durationMinutes = Math.floor(durationSeconds / 60);
+    if (durationMinutes < 60) return `${durationMinutes}m ${durationSeconds % 60}s`;
+    const durationHours = Math.floor(durationMinutes / 60);
+    return `${durationHours}h ${durationMinutes % 60}m`;
+  } catch (e) {
+    console.error("Error parsing date for duration:", e);
+    return '-';
+  }
 }
 
-// Mock data for demonstration
-const MOCK_HISTORY: ExecutionHistoryItem[] = [
-  {
-    id: 'exec-1',
-    repoUrl: 'https://github.com/example/repo1',
-    startTime: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
-    status: 'running',
-  },
-  {
-    id: 'exec-2',
-    repoUrl: 'https://github.com/test/another-repo',
-    startTime: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago
-    endTime: new Date(Date.now() - 25 * 60 * 1000), // 5 minutes later
-    status: 'completed',
-    details: 'Documentation generated successfully. 5 files processed.',
-  },
-  {
-    id: 'exec-3',
-    repoUrl: 'https://github.com/org/project-alpha',
-    startTime: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
-    endTime: new Date(Date.now() - 1 * 60 * 60 * 1000 - 50 * 60 * 1000), // 10 mins later
-    status: 'failed',
-    details: 'Error: Could not clone repository. Check permissions.',
-  },
-    {
-    id: 'exec-4',
-    repoUrl: 'https://github.com/user/new-feature',
-    startTime: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days ago
-    endTime: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000 + 15 * 60 * 1000), // 15 mins later
-    status: 'completed',
-    details: 'Documentation generated successfully. 12 files processed.',
-  },
-];
-
-// Helper to format duration
-function formatDuration(start: Date, end?: Date): string {
-  if (!end) return '-';
-  const durationSeconds = Math.round((end.getTime() - start.getTime()) / 1000);
-  if (durationSeconds < 60) return `${durationSeconds}s`;
-  const durationMinutes = Math.round(durationSeconds / 60);
-   if (durationMinutes < 60) return `${durationMinutes}m`;
-   const durationHours = Math.round(durationMinutes / 60);
-   return `${durationHours}h ${durationMinutes % 60}m`;
+// Format start time string nicely
+function formatStartTime(startStr: string): string {
+    try {
+        const start = parseISO(startStr);
+        // Check if the date is recent (e.g., within last 7 days) for relative time
+        if (new Date().getTime() - start.getTime() < 7 * 24 * 60 * 60 * 1000) {
+            return formatDistanceToNow(start, { addSuffix: true });
+        }
+        // Otherwise, show absolute date/time
+        return start.toLocaleString();
+    } catch(e) {
+        console.error("Error parsing start time:", e);
+        return startStr; // Return original string if parsing fails
+    }
 }
+
 
 // Map status to Badge variant and Icon
 const statusMap: Record<
@@ -82,37 +79,88 @@ const statusMap: Record<
 > = {
   pending: { variant: 'outline', Icon: Clock },
   running: { variant: 'secondary', Icon: Loader2 },
-  completed: { variant: 'default', Icon: CheckCircle }, // Using default (primary) for completed
+  completed: { variant: 'default', Icon: CheckCircle }, // Using default (primary/teal) for completed
   failed: { variant: 'destructive', Icon: XCircle },
 };
+
+const POLLING_INTERVAL_MS = 5000; // Poll every 5 seconds
 
 export function ExecutionHistory() {
   const [history, setHistory] = useState<ExecutionHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
+  const loadHistory = useCallback(async (showLoading = true) => {
+    if (showLoading) setIsLoading(true);
+    setError(null);
+    const result = await fetchExecutionHistory();
+    if ('error' in result) {
+      setError(result.error);
+      toast({
+        variant: 'destructive',
+        title: 'Failed to Load History',
+        description: result.error,
+      });
+    } else {
+      setHistory(result); // Assuming backend returns sorted data
+    }
+    if (showLoading) setIsLoading(false);
+  }, [toast]); // Added toast dependency
+
+  // Initial load
   useEffect(() => {
-    // Simulate fetching data
-    setIsLoading(true);
-    const timer = setTimeout(() => {
-       // In a real app, you'd fetch from an API here
-       // Sort by start time, newest first
-      setHistory(MOCK_HISTORY.sort((a, b) => b.startTime.getTime() - a.startTime.getTime()));
-      setIsLoading(false);
-    }, 1000); // Simulate network delay
+    loadHistory();
+  }, [loadHistory]);
 
-    return () => clearTimeout(timer);
-  }, []); // Run once on mount
+   // Polling mechanism for running jobs
+  useEffect(() => {
+    const runningJobIds = history.filter(job => job.status === 'running').map(job => job.job_id);
 
-   // Function to periodically refresh running tasks (optional)
-   useEffect(() => {
-    const interval = setInterval(() => {
-      // In a real app, fetch updated status for 'running' tasks
-      // For demo, just force a re-render to update relative times
-      setHistory(prev => [...prev]);
-    }, 60 * 1000); // Refresh every minute
+    if (runningJobIds.length === 0) {
+      return; // No need to poll if no jobs are running
+    }
 
-    return () => clearInterval(interval);
-   }, []);
+    const intervalId = setInterval(async () => {
+        console.log("Polling for status updates...", runningJobIds);
+        let historyUpdated = false;
+        for (const jobId of runningJobIds) {
+            const statusResult = await fetchJobStatus(jobId);
+            if (!('error' in statusResult)) {
+                 // Update the specific job in the history state
+                 setHistory(prevHistory => {
+                     const updated = prevHistory.map(job =>
+                         job.job_id === jobId ? statusResult : job
+                     );
+                     // Check if the status actually changed to avoid unnecessary re-renders if polling is fast
+                     const oldJob = prevHistory.find(j => j.job_id === jobId);
+                     if (oldJob?.status !== statusResult.status) {
+                         historyUpdated = true;
+                         if (statusResult.status === 'completed' || statusResult.status === 'failed') {
+                             toast({
+                                 title: `Job ${statusResult.status.toUpperCase()}`,
+                                 description: `Job for ${statusResult.repo_url.split('/').slice(-2).join('/')} finished.`,
+                             });
+                         }
+                     }
+                     return updated;
+                 });
+            } else {
+                // Handle error fetching status for a specific job (e.g., log it)
+                console.warn(`Polling failed for job ${jobId}: ${statusResult.error}`);
+            }
+        }
+         // Optional: If any job finished, trigger a full history reload
+        // if (historyUpdated && history.some(job => job.job_id && runningJobIds.includes(job.job_id) && (job.status === 'completed' || job.status === 'failed'))) {
+        //    loadHistory(false); // Reload full history without showing loading indicator
+        // }
+
+    }, POLLING_INTERVAL_MS);
+
+    // Cleanup function to clear the interval when the component unmounts
+    // or when the list of running jobs changes
+    return () => clearInterval(intervalId);
+  }, [history, toast]); // Rerun effect if history changes (e.g., job status updates)
 
   const renderSkeleton = () => (
     <>
@@ -130,27 +178,40 @@ export function ExecutionHistory() {
 
   return (
     <Card className="w-full mt-8 shadow-md">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-           <Clock className="h-6 w-6 text-primary" />
-           Execution History
-        </CardTitle>
-         <CardDescription>
-           Track the progress and status of your documentation jobs.
-         </CardDescription>
+       <CardHeader className="flex flex-row items-center justify-between">
+         <div>
+             <CardTitle className="flex items-center gap-2">
+               <Clock className="h-6 w-6 text-primary" />
+               Execution History
+             </CardTitle>
+             <CardDescription>
+               Track the progress and status of your documentation jobs. Running jobs update automatically.
+             </CardDescription>
+         </div>
+         <Button variant="outline" size="sm" onClick={() => loadHistory(true)} disabled={isLoading}>
+             <Loader2 className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : 'hidden'}`} />
+            Refresh
+          </Button>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-[400px] w-full rounded-md border">
+         {error && (
+             <div className="flex items-center justify-center p-4 text-destructive bg-destructive/10 rounded-md border border-destructive/30">
+                 <AlertTriangle className="h-5 w-5 mr-2" />
+                 <span>Error loading history: {error}</span>
+            </div>
+         )}
+        <ScrollArea className={`h-[400px] w-full rounded-md border ${error ? 'mt-4' : ''}`}>
+         <TooltipProvider>
           <Table>
-             {!isLoading && history.length === 0 && (
-                <TableCaption>No documentation history yet. Submit a repository above to get started.</TableCaption>
-             )}
-             {isLoading && (
+             {(isLoading && history.length === 0) && (
                 <TableCaption>Loading history...</TableCaption>
+             )}
+             {(!isLoading && !error && history.length === 0) && (
+                <TableCaption>No documentation history yet. Submit a repository above.</TableCaption>
              )}
             <TableHeader>
               <TableRow>
-                <TableHead>Repository</TableHead>
+                <TableHead>Repository / Path</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Status</TableHead>
@@ -158,34 +219,63 @@ export function ExecutionHistory() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? renderSkeleton() : (
+              {isLoading && history.length === 0 ? renderSkeleton() : (
                 history.map((item) => {
-                  const { Icon, variant } = statusMap[item.status];
-                  const repoName = item.repoUrl.split('/').slice(-2).join('/'); // Extract user/repo
+                  const { Icon, variant } = statusMap[item.status] || statusMap.pending; // Default to pending if status unknown
+                  const repoName = item.repo_url.includes('/')
+                        ? item.repo_url.split('/').slice(-2).join('/') // Extract user/repo for URL
+                        : item.repo_url; // Show full path if local
+
                   return (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-medium truncate max-w-xs" title={item.repoUrl}>
-                        {repoName}
-                      </TableCell>
-                      <TableCell title={item.startTime.toLocaleString()}>
-                        {formatDistanceToNow(item.startTime, { addSuffix: true })}
-                      </TableCell>
-                      <TableCell>{formatDuration(item.startTime, item.endTime)}</TableCell>
+                    <TableRow key={item.job_id}>
+                       <TableCell className="font-medium truncate max-w-xs">
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                             <span>{repoName}</span>
+                           </TooltipTrigger>
+                           <TooltipContent>
+                             <p>{item.repo_url}</p>
+                           </TooltipContent>
+                         </Tooltip>
+                       </TableCell>
+                       <TableCell>
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                               <span>{formatStartTime(item.start_time)}</span>
+                            </TooltipTrigger>
+                           <TooltipContent>
+                             <p>{new Date(item.start_time).toLocaleString()}</p>
+                           </TooltipContent>
+                         </Tooltip>
+                        </TableCell>
+                      <TableCell>{formatDuration(item.start_time, item.end_time)}</TableCell>
                       <TableCell>
                         <Badge variant={variant} className="flex items-center gap-1 capitalize">
                           <Icon className={`h-3 w-3 ${item.status === 'running' ? 'animate-spin' : ''}`} />
                           {item.status}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground truncate max-w-md" title={item.details}>
-                        {item.details || '-'}
-                      </TableCell>
+                       <TableCell className="text-sm text-muted-foreground truncate max-w-md">
+                         <Tooltip>
+                             <TooltipTrigger asChild>
+                                 <span>{item.details || '-'}</span>
+                             </TooltipTrigger>
+                            {item.details && ( // Only show tooltip if there are details
+                                 <TooltipContent>
+                                     <p className="max-w-xs whitespace-normal">{item.details}</p>
+                                 </TooltipContent>
+                             )}
+                         </Tooltip>
+                        </TableCell>
                     </TableRow>
                   );
                 })
               )}
+               {/* Show skeleton rows below existing data when refreshing */}
+               {isLoading && history.length > 0 && renderSkeleton()}
             </TableBody>
           </Table>
+          </TooltipProvider>
         </ScrollArea>
       </CardContent>
     </Card>
