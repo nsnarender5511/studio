@@ -76,11 +76,12 @@ async def _run_adk_orchestration_logic(
             nonlocal current_stage # Tell python to use current_stage from the outer scope
             _last_event = None
             _final_state_delta = {}
+            # Revert new_message back to empty dict
             async for event in runner.run_async(
                 user_id=user_id,
                 session_id=session_id,
                 new_message=dict(), # Revert back to empty dict
-                run_config=RunConfig() # Add config if needed
+                run_config=RunConfig()
             ):
                 logger.debug(f"Job {job_id}: Received ADK event: ID={event.id}, Author={event.author}, Actions={event.actions}")
                 _last_event = event
@@ -98,6 +99,7 @@ async def _run_adk_orchestration_logic(
             return _last_event, _final_state_delta
 
         # --- Process Final ADK Event --- 
+        # REMOVED initial_state_data argument from call
         last_event, final_state_delta = await _run_adk_runner_async()
         if last_event is None:
             logger.warning(f"Job {job_id}: ADK runner finished without yielding any events.")

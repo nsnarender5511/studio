@@ -34,26 +34,33 @@ logger = logging.getLogger(__name__)
 
 # --- Factory function for Sub-Agents --- 
 def get_sub_agents() -> dict[str, BaseAgent]:
-    """Creates the dictionary of sub-agents required by the orchestrator."""
-    logger.debug("Factory: Creating sub-agent dictionary")
-    # Return a dictionary mapping agent names to instances
+    """Creates the dictionary of sub-agents using instances from agent_module."""
+    logger.debug("Factory: Creating sub-agent dictionary from agent_module instances")
+    # Use the agent instances directly imported/defined in agent_module
+    # Ensure agent_module.__all__ correctly lists the instance variable names
+    # Map AgentKeys.ENUM.value to the corresponding instance
     return {
-        "FileIdentificationAgent": agent_defs.PlaceholderAgent(name="FileIdentificationAgent"),
-        "StructureDesignerAgent": agent_defs.PlaceholderAgent(name="StructureDesignerAgent"),
-        "CodeParserAgent": agent_defs.PlaceholderAgent(name="CodeParserAgent"),
-        "CodeInterpreterAgent": agent_defs.PlaceholderAgent(name="CodeInterpreterAgent"),
-        "DependencyAnalyzerAgent": agent_defs.PlaceholderAgent(name="DependencyAnalyzerAgent"),
-        "TestingAnalyzerAgent": agent_defs.PlaceholderAgent(name="TestingAnalyzerAgent"),
-        "FeatureExtractorAgent": agent_defs.PlaceholderAgent(name="FeatureExtractorAgent"),
-        "DocContentAgent": agent_defs.PlaceholderAgent(name="DocContentAgent"),
-        "VerifierAgent": agent_defs.PlaceholderAgent(name="VerifierAgent"),
-        "VisualizationAgent": agent_defs.PlaceholderAgent(name="VisualizationAgent"),
-        "MarkdownFormatterAgent": agent_defs.PlaceholderAgent(name="MarkdownFormatterAgent"),
-        "ObsidianWriterAgent": agent_defs.PlaceholderAgent(name="ObsidianWriterAgent"),
-        "SummarizerAgent": agent_defs.PlaceholderAgent(name="SummarizerAgent"),
-        "FactCheckingAgent": agent_defs.PlaceholderAgent(name="FactCheckingAgent"),
-        "SelfReflectionAgent": agent_defs.PlaceholderAgent(name="SelfReflectionAgent"),
-        "CodeExecutionVerifierAgent": agent_defs.PlaceholderAgent(name="CodeExecutionVerifierAgent"),
+        # Phase 1 MVP Agents
+        AgentKeys.FILE_IDENTIFICATION.value: agent_module.file_identification_agent,
+        AgentKeys.STRUCTURE_DESIGNER.value: agent_module.structure_designer_agent,
+        AgentKeys.CODE_PARSER.value: agent_module.code_parser_agent,
+        AgentKeys.CODE_INTERPRETER.value: agent_module.code_interpreter_agent,
+        AgentKeys.CONTENT_GENERATOR.value: agent_module.content_generator_agent, # Using renamed instance
+        AgentKeys.MD_FORMATTER.value: agent_module.md_formatter_agent,          # Using renamed instance
+
+        # Phase 2+ Agents (using placeholders instantiated in agent_module)
+        AgentKeys.DEPENDENCY_ANALYZER.value: agent_module.dependency_analyzer_agent,
+        AgentKeys.TESTING_ANALYZER.value: agent_module.testing_analyzer_agent,
+        AgentKeys.FEATURE_EXTRACTOR.value: agent_module.feature_extractor_agent,
+        AgentKeys.VERIFIER.value: agent_module.verifier_agent,
+        AgentKeys.VISUALIZER.value: agent_module.visualizer_agent,
+        AgentKeys.OBSIDIAN_WRITER.value: agent_module.obsidian_writer_agent,
+        AgentKeys.SUMMARIZER.value: agent_module.summarizer_agent,
+        AgentKeys.FACT_CHECKER.value: agent_module.fact_checker_agent, # Placeholder
+        AgentKeys.SELF_REFLECTION.value: agent_module.self_reflection_agent, # Placeholder
+        AgentKeys.CODE_EXECUTION_VERIFIER.value: agent_module.code_execution_verifier_agent, # Placeholder
+        
+        # TODO: Add KG/Memory Manager Agents when implemented
     }
 
 class Container(containers.DeclarativeContainer):

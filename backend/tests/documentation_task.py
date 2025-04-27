@@ -7,6 +7,7 @@ import shutil
 import asyncio
 import git # Requires GitPython
 from typing import Any, Dict, Optional
+import google.generativeai as genai # <-- ADD IMPORT
 
 # Setup Python path for imports if running script directly from backend/
 import sys
@@ -54,6 +55,14 @@ async def main(): # Added async def main()
     else:
         # Mask the key in logs if needed, but confirm it's loaded
         logger.info("GOOGLE_API_KEY loaded successfully.")
+        # Configure google.generativeai globally <-- ADD THIS BLOCK
+        try:
+            genai.configure(api_key=config.GOOGLE_API_KEY)
+            logger.info("google.generativeai configured successfully with API key.")
+        except Exception as genai_config_err:
+            logger.error(f"Failed to configure google.generativeai: {genai_config_err}")
+            # Depending on requirements, might want to return failure here too
+            return {"final_status": JobStatus.FAILED.value, "details": "Failed to configure google.generativeai", "error_info": {"error_type": type(genai_config_err).__name__}}
 
     # Create a base temporary directory for this test run
     base_temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="gitdocu_test_"))
@@ -63,6 +72,14 @@ async def main(): # Added async def main()
 
     job_id = str(uuid.uuid4())
     result = None
+
+    # Define initial state data here
+    initial_state_data = {
+        "repo_path": str(clone_dir), # Use actual clone path
+        "output_dir": str(output_dir), # Use actual output path
+        "use_obsidian_format": USE_OBSIDIAN,
+        "verbose_logging": True
+    }
 
     logger.info(f"Starting test for job_id: {job_id}")
     logger.info(f"Temporary directories created:")
@@ -98,6 +115,39 @@ async def main(): # Added async def main()
         except Exception as session_err:
             logger.error(f"Failed to create ADK session: {session_err}", exc_info=True)
             raise # Re-raise to stop the test
+
+        # 2b. Set Initial State via Session Service (Get/Modify Pattern)
+        try:
+            logger.info(f"Attempting to get session {job_id} to set initial state...")
+            # Get the session object first, providing all required keys
+            # Ensure runner is resolved before this point
+            if not runner: raise RuntimeError("Runner not resolved before getting app_name")
+            session_app_name = runner.app_name
+            # user_id is already defined in this scope from line 90
+            session = session_service.get_session(
+                session_id=job_id,
+                app_name=session_app_name, # Pass app_name
+                user_id=user_id            # Pass user_id (already defined)
+            )
+            if not session:
+                 # Include user/app in error for better debugging
+                 raise RuntimeError(f"Session {job_id} for user {user_id}, app {session_app_name} not found after creation.")
+
+            logger.info(f"Updating state for session {job_id}...")
+            # Modify the state attribute of the retrieved session object
+            session.state.update(initial_state_data)
+            logger.info(f"Initial state updated in session object for {job_id}.")
+            # NOTE: Assuming direct modification is sufficient for InMemorySessionService.
+            #       Persistent services (DB/Vertex) might require an explicit
+            #       session_service.update_session(session) call here.
+
+        except AttributeError as e:
+            # Catch potential AttributeError from get_session or state.update
+            logger.error(f"AttributeError during state update (check get_session/state.update): {e}", exc_info=True)
+            raise
+        except Exception as state_err:
+            logger.error(f"Failed to set initial session state via Get/Modify: {state_err}", exc_info=True)
+            raise
 
         # 3. Create Initial DB Record (optional but good practice for testing repo)
         try:

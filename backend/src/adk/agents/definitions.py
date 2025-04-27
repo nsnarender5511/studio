@@ -11,6 +11,15 @@ from google.adk.runners import InvocationContext # Event removed, imported below
 from google.adk.events import Event, EventActions # Import Event and EventActions
 import time # Import time for timestamps
 
+# Import tool functions needed by agents
+from src.adk.tools.definitions import (
+    read_directory,
+    write_file_content,
+    ensure_directory_exists,
+    parse_code,
+    read_file_content
+)
+
 logger = logging.getLogger(__name__) 
 
 # --- Common Model Definition (Example) ---
@@ -50,27 +59,36 @@ class OrchestratorAgent(BaseAgent):
 
     # Override model_post_init to handle sub_agent dictionary correctly
     def model_post_init(self, __context: Any) -> None:
-        # 1. REMOVED: Explicit setting of parent_agent.
-        # We will let the superclass method handle it now, hoping it iterates the list correctly.
-        # if isinstance(self.sub_agents, dict):
-        #     for sub_agent in self.sub_agents.values():
-        #         ...
-        
-        # 2. Temporarily replace self.sub_agents with its values for the super call
-        original_sub_agents = self.sub_agents
+        # 1. Store original dictionary reference if needed for debugging/logging
+        original_sub_agents_dict = self.sub_agents
         temp_sub_agents_list = []
-        if isinstance(original_sub_agents, dict):
-             temp_sub_agents_list = list(original_sub_agents.values())
-        elif isinstance(original_sub_agents, list): # Handle list case just in case
-             temp_sub_agents_list = original_sub_agents
-        
+        if isinstance(original_sub_agents_dict, dict):
+             # Create a list of the actual agent instances (the dictionary values)
+             temp_sub_agents_list = list(original_sub_agents_dict.values())
+             logger.debug(f"Orchestrator model_post_init: Converted sub_agents dict to list of {len(temp_sub_agents_list)} instances.")
+        elif isinstance(original_sub_agents_dict, list): # Handle list case just in case
+             temp_sub_agents_list = original_sub_agents_dict
+             logger.debug(f"Orchestrator model_post_init: Received sub_agents as list of {len(temp_sub_agents_list)} instances.")
+        else:
+             # Handle unexpected type if necessary
+             logger.warning(f"OrchestratorAgent sub_agents expected dict or list, got {type(original_sub_agents_dict)}. Proceeding with empty list.")
+             temp_sub_agents_list = []
+
+        # 2. Assign the LIST of agent instances to self.sub_agents
+        #    This list will be used by the superclass's post_init and potentially find_sub_agent
+        self.sub_agents = temp_sub_agents_list
+        # 3. Call super().model_post_init - this should iterate the list correctly now
         try:
-            self.sub_agents = temp_sub_agents_list # Temporarily assign list
-            # 3. Call super().model_post_init - it should now iterate over the list and set parent_agent
             super().model_post_init(__context)
-        finally:
-            # 4. Restore the original sub_agents dictionary (important for later use)
-            self.sub_agents = original_sub_agents
+        except Exception as e:
+             logger.error(f"Error calling super().model_post_init in Orchestrator: {e}", exc_info=True)
+             # Decide if we should restore the original dict here on error?
+             # For now, let the error propagate, but keep self.sub_agents as the list
+             # self.sub_agents = original_sub_agents_dict # Maybe restore on error?
+
+        # 4. DO NOT restore the dictionary. Keep self.sub_agents as the list.
+        # The finally block that restored the original dictionary is removed.
+        logger.debug(f"Orchestrator model_post_init: self.sub_agents permanently set to list.")
 
     async def _run_async_impl(self, ctx: InvocationContext):
         job_id = ctx.session.id 
@@ -89,33 +107,16 @@ class OrchestratorAgent(BaseAgent):
         yield initial_event
 
         # Accumulate state changes locally before yielding
-        current_state_delta = {}
+        current_state_delta = ctx.session.state.copy() # Start with current invocation state
 
         try:
             # --- Retrieve Initial State --- 
-            # Use placeholders as initial state passing is still unresolved
-            repo_path_placeholder = "/path/to/placeholder/repo" 
-            output_dir_placeholder = "/path/to/placeholder/output"
-            use_obsidian = False 
-            logger.warning(f"Job {job_id}: Using placeholder paths due to state passing issue.")
-
-            # Store placeholders in state delta for sub-agents
-            current_state_delta.update({
-                "repo_path": repo_path_placeholder, 
-                "output_dir": output_dir_placeholder, 
-                "use_obsidian_format": use_obsidian, 
-                "verbose_logging": True
-            })
-            # Yield state update event
-            update_actions = EventActions(state_delta=current_state_delta.copy())
-            update_event = Event(
-                id=Event.new_id(),
-                invocation_id=ctx.invocation_id,
-                author=self.name,
-                timestamp=time.time(),
-                actions=update_actions
-            )
-            yield update_event
+            # REMOVED Placeholder logic - Initial state should now be in ctx.session.state 
+            # if not ctx.state.get("repo_path") or not ctx.state.get("output_dir"):
+            #    logger.warning(f"Job {job_id}: Initial state (repo_path/output_dir) not found in ctx.state. Check runner invocation.")
+            #    # Decide how to handle: raise error? use defaults? For now, let previous logic handle/fail downstream.
+            
+            # No need to explicitly yield initial state update if runner handles it.
 
             # --- Stage 1: File Identification --- 
             current_stage = AdkStages.FILE_IDENTIFICATION.value 
@@ -133,7 +134,7 @@ class OrchestratorAgent(BaseAgent):
             )
             yield stage_start_event
 
-            file_id_agent = ctx.find_sub_agent(AgentKeys.FILE_IDENTIFICATION.value)
+            file_id_agent = self.find_sub_agent(AgentKeys.FILE_IDENTIFICATION.value)
             if not file_id_agent: raise RuntimeError(f"Sub-agent not found: {AgentKeys.FILE_IDENTIFICATION.value}")
 
             file_id_results = {} 
@@ -177,7 +178,7 @@ class OrchestratorAgent(BaseAgent):
             )
             yield stage_start_event_2
             
-            designer_agent = ctx.find_sub_agent(AgentKeys.STRUCTURE_DESIGNER.value)
+            designer_agent = self.find_sub_agent(AgentKeys.STRUCTURE_DESIGNER.value)
             if not designer_agent: raise RuntimeError(f"Sub-agent not found: {AgentKeys.STRUCTURE_DESIGNER.value}")
 
             designer_results = {} 
@@ -257,7 +258,7 @@ class OrchestratorAgent(BaseAgent):
                     )
                     yield sub_stage_event_parse
                     
-                    parser_agent = ctx.find_sub_agent(AgentKeys.CODE_PARSER.value)
+                    parser_agent = self.find_sub_agent(AgentKeys.CODE_PARSER.value)
                     if not parser_agent: raise RuntimeError(f"Sub-agent not found: {AgentKeys.CODE_PARSER.value}")
                     parser_results = {} 
                     async for event in parser_agent.run_async(ctx):
@@ -293,7 +294,7 @@ class OrchestratorAgent(BaseAgent):
                     )
                     yield sub_stage_event_interpret
                     
-                    interpreter_agent = ctx.find_sub_agent(AgentKeys.CODE_INTERPRETER.value)
+                    interpreter_agent = self.find_sub_agent(AgentKeys.CODE_INTERPRETER.value)
                     if not interpreter_agent: raise RuntimeError(f"Sub-agent not found: {AgentKeys.CODE_INTERPRETER.value}")
                     interpreter_results = {} 
                     async for event in interpreter_agent.run_async(ctx):
@@ -329,7 +330,7 @@ class OrchestratorAgent(BaseAgent):
                     )
                     yield sub_stage_event_content
                     
-                    content_agent = ctx.find_sub_agent(AgentKeys.CONTENT_GENERATOR.value)
+                    content_agent = self.find_sub_agent(AgentKeys.CONTENT_GENERATOR.value)
                     if not content_agent: raise RuntimeError(f"Sub-agent not found: {AgentKeys.CONTENT_GENERATOR.value}")
                     content_results = {} 
                     async for event in content_agent.run_async(ctx):
@@ -366,7 +367,7 @@ class OrchestratorAgent(BaseAgent):
                     yield sub_stage_event_format
                     
                     formatter_agent_key = AgentKeys.OBSIDIAN_WRITER.value if use_obsidian else AgentKeys.MD_FORMATTER.value
-                    formatter_agent = ctx.find_sub_agent(formatter_agent_key)
+                    formatter_agent = self.find_sub_agent(formatter_agent_key)
                     if not formatter_agent: raise RuntimeError(f"Sub-agent not found: {formatter_agent_key}")
                     
                     formatter_results = {} 
@@ -496,7 +497,7 @@ class FileIdentificationAgent(LlmAgent):
         "dependency folders (node_modules/, venv/), and documentation files (.md, .rst) unless it's the root README.md. "
         "List the relative paths of the identified files from the repository root."
     )
-    tools: list = ["read_directory"] # Tool instances imported in tools/__init__.py
+    tools: list = [read_directory] # Use the imported function object
     output_key: str = "identified_files" # Expected output structure: {"identified_files": ["path/to/file1.py", ...]}
 
 class StructureDesignerAgent(LlmAgent):
@@ -523,7 +524,7 @@ class CodeParserAgent(LlmAgent):
         "Use the 'parse_code' tool to perform the parsing. "
         "Return the structured data obtained from the tool."
     )
-    tools: list = ["parse_code", "read_file_content"] # read_file might be needed by parse_code internally
+    tools: list = [parse_code, read_file_content] # Use imported function objects
     output_key: str = "parsed_code" # Expected output: {"parsed_code": {... structured data from tool ...}}
 
 class CodeInterpreterAgent(LlmAgent):
@@ -568,7 +569,7 @@ class MarkdownFormatterAgent(LlmAgent):
         "Use the 'ensure_directory_exists' tool for the directory part of the 'current_output_path' state variable. "
         "Then, use the 'write_file_content' tool to save the final Markdown content to the full 'current_output_path'."
     )
-    tools: list = ["ensure_directory_exists", "write_file_content"]
+    tools: list = [ensure_directory_exists, write_file_content] # Use imported function objects
     # Output key might not be strictly needed if it just performs actions
     # Outputting status might be useful: {"formatting_status": "success"}
     output_key: str = "formatting_status"
