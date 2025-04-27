@@ -25,8 +25,8 @@ try:
     # We need these for type hints and resolving
     from google.adk.runners import Runner 
     from src.persistence.repository import JobHistoryRepository
-    # Import the CORE logic function, not the celery task
-    from src.tasks.documentation_task import _execute_adk_flow # <-- UNCOMMENT THIS
+    # Import the CORE async helper function
+    from src.tasks.documentation_task import _run_adk_orchestration_logic # <--- IMPORT THIS
 except ImportError as e:
     print(f"Error importing application modules: {e}")
     print("Ensure you are running this script from the 'backend' directory or have the project structure setup correctly.")
@@ -112,28 +112,34 @@ async def main(): # Added async def main()
         git.Repo.clone_from(TEST_REPO_URL, str(clone_dir), depth=1)
         logger.info("Repository cloned successfully.")
 
-        # 5. Execute the CORE async function directly
-        logger.info("Executing _execute_adk_flow...")
+        # 5. Execute the CORE async helper function directly
+        logger.info("Executing _run_adk_orchestration_logic...")
         
-        # Define a simple progress printer (optional)
         def print_progress(state: str, meta: dict):
              print(f"[Test Progress] State: {state}, Meta: {meta}")
 
-        # Use await directly now since we are in an async function
-        # No need for asyncio.run() here
-        result = await _execute_adk_flow( # Changed asyncio.run to await
+        # Call the extracted async helper function
+        result_dict = await _run_adk_orchestration_logic( 
             job_id=job_id,
             repo_clone_path=str(clone_dir),
             output_dir_job=str(output_dir),
             use_obsidian=USE_OBSIDIAN,
-            runner=runner, # Pass resolved runner
-            repo=repo,     # Pass resolved repo
-            update_progress_callback=print_progress # Pass optional progress printer
+            runner=runner, 
+            repo=repo,     
+            update_progress_callback=print_progress 
         )
+        
+        # Adapt result extraction if the helper function's return dict changes
+        result = {
+            "final_status": result_dict.get("final_status", JobStatus.FAILED).value, # Ensure value is used
+            "details": result_dict.get("final_result_details", "Logic finished without details."),
+            "error_info": result_dict.get("error_info")
+        }
+        
         logger.info("Core function execution finished.")
-        print("\n--- Core Function Result ---")
-        print(result)
-        print("-----------------------------")
+        print("\n--- Core Function Result --- ")
+        print(result) # Print the adapted result
+        print("----------------------------- ")
 
     except Exception as e:
         logger.error(f"An error occurred during the test: {e}", exc_info=True)
