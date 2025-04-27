@@ -65,3 +65,13 @@ next-env.d.ts
 # *.swo
 # *~
 # Thumbs.db
+
+# --- IDE / Editor --- #
+# Also ignore top-level OS/IDE files if not already covered
+/.cursor/
+# .idea/
+# .vscode/
+# *.swp
+# *.swo
+# *~
+# Thumbs.db
