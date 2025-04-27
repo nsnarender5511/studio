@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/frontend/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -38,3 +39,39 @@ yarn-error.log*
 next-env.d.ts
 
 .genkit/*
+
+# --- Backend (Python/Flask/Poetry) ---
+/backend/__pycache__/
+/backend/*.pyc
+/backend/*.pyo
+/backend/*.pyd
+/backend/*.egg-info/
+/backend/dist/
+/backend/build/
+/backend/wheels/
+/backend/*.egg
+/backend/.env*
+/backend/instance/
+/backend/*.log
+# /backend/.celerybeat-schedule
+/backend/.pytest_cache/
+/backend/.coverage
+/backend/htmlcov/
+/backend/output/
+# Also ignore top-level OS/IDE files if not already covered
+# .idea/
+# .vscode/
+# *.swp
+# *.swo
+# *~
+# Thumbs.db
+
+# --- IDE / Editor --- #
+# Also ignore top-level OS/IDE files if not already covered
+/.cursor/
+# .idea/
+# .vscode/
+# *.swp
+# *.swo
+# *~
+# Thumbs.db

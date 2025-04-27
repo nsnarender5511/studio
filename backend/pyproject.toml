@@ -2,24 +2,29 @@
 name = "gitdocu-backend"
 version = "0.1.0"
 description = "Backend service for GitDocu using Google ADK."
-authors = ["Your Name <you@example.com>"]
+authors = ["Narender <narender@example.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 Flask = "^3.0.0"
 flask-cors = "^4.0.0"
-google-adk = "^0.3.0"
-google-generativeai = "*"
-astroid = "*"
-graphviz = "*"
-matplotlib = "*"
-Flask-Cors = "^4.0.0"
-celery = "^5.3.6"
-redis = "^5.0.1"
-GitPython = "^3.1.40"
-pydantic = "^2.5.2"
+# Pinning ADK to a specific commit for stability - replace with tag/branch if preferred
+# google-adk = {git = "https://github.com/google/generative-ai-docs", rev = "main"} # Incorrect git dependency
+google-adk = "^0.3.0" # Use PyPI package
+google-generativeai = "^0.7.1" # Specified version
+astroid = "^3.2.2" # Specified version
+graphviz = "^0.20.3" # Specified version
+matplotlib = "^3.9.0" # Specified version
+# Flask-Cors = "^4.0.0" # Removed duplicate
+celery = {extras = ["redis"], version = "^5.4.0"}
+redis = "^5.0.4"
+GitPython = "^3.1.43"
+pydantic = {extras = ["dotenv"], version = "^2.5.2"} # Keep 2.5.2 based on lockfile? Or update?
 Flask-SQLAlchemy = "^3.1.1"
+python-json-logger = "^2.0.7"
+dependency-injector = "^4.41"
+python-dotenv = "^1.0.1"
 
 
 [build-system]
@@ -27,4 +32,9 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.group.dev.dependencies]
-# ... existing dev dependencies ...
+pytest = "^8.2.2"
+pytest-mock = "^3.12.0"
+requests = "^2.31.0"
+flake8 = "^7.0.0"
+mypy = "^1.10.0"
+types-requests = "^2.31.0"
